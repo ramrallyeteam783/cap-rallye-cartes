@@ -1,0 +1,38 @@
+name: Construire la carte du Québec
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 1 * *'
+permissions:
+  contents: write
+jobs:
+  carte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Installer l'outil de carte
+        run: |
+          gh release download --repo protomaps/go-pmtiles --pattern '*Linux_x86_64.tar.gz' --output pm.tgz
+          tar xzf pm.tgz pmtiles
+      - name: Trouver la plus récente carte du monde
+        run: |
+          for i in 0 1 2 3 4 5 6 7; do
+            D=$(date -u -d "$i days ago" +%Y%m%d)
+            for H in build.protomaps.com maps.protomaps.com/builds; do
+              if curl -sfI "https://$H/$D.pmtiles" > /dev/null; then echo "URL=https://$H/$D.pmtiles" >> "$GITHUB_ENV"; echo "JOUR=$D" >> "$GITHUB_ENV"; exit 0; fi
+            done
+          done
+          echo "Aucune carte récente trouvée"; exit 1
+      - name: Découper le Québec habité
+        run: ./pmtiles extract "$URL" quebec.pmtiles --bbox=-80,44.5,-56,51.5 --maxzoom=14 --download-threads=8
+      - name: Vérifier la taille
+        run: |
+          ls -lh quebec.pmtiles
+          S=$(stat -c%s quebec.pmtiles)
+          if [ "$S" -ge 2147000000 ]; then echo "Fichier trop gros pour GitHub ($S octets)"; exit 1; fi
+      - name: Publier le fichier
+        run: |
+          gh release delete carte-quebec --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create carte-quebec quebec.pmtiles --repo "$GITHUB_REPOSITORY" --title "Carte du Québec ($JOUR)" --notes "Données © OpenStreetMap, carte Protomaps."
